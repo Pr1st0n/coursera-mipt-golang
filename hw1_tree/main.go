@@ -49,7 +49,7 @@ func scanDir(str string, path string, lvl int, offset [2]int, printFiles bool) (
 	for idx, file := range dir {
 		isLast := idx == len(dir)-1
 
-		for step := 0; step < lvl - 1; step++ {
+		for step := 0; step < lvl-1; step++ {
 			if step >= offset[0] && step <= offset[1] {
 				str += "	"
 			} else {
