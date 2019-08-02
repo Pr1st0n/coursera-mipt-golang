@@ -67,11 +67,11 @@ func SingleHash(in, out chan interface{}) {
 		}(md5, str)
 
 		// Concat the result and pass further.
-		go func(ch1 chan string, ch2 chan string, out chan interface{}, wg *sync.WaitGroup) {
+		go func(ch1 chan string, ch2 chan string) {
 			defer wg.Done()
 			result := <-ch1 + "~" + <-ch2
 			out <- result
-		}(crc32, md5, out, wg)
+		}(crc32, md5)
 	}
 
 	wg.Wait()
@@ -109,7 +109,7 @@ func MultiHash(in, out chan interface{}) {
 		}
 
 		// Collect result of calculations, concat it and pass further.
-		go func(ch0 chan string, out0 chan interface{}) {
+		go func(ch0 chan string) {
 			defer wg.Done()
 			defer close(ch)
 
@@ -119,8 +119,8 @@ func MultiHash(in, out chan interface{}) {
 				result += <-ch
 			}
 
-			out0 <- result
-		}(ch, out)
+			out <- result
+		}(ch)
 	}
 
 	wg.Wait()
