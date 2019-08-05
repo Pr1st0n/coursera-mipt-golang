@@ -136,7 +136,7 @@ func CombineResults(in, out chan interface{}) {
 		str, ok := raw.(string)
 
 		if !ok {
-			fmt.Println("CombineResults: Error: can't convert input to integer cmb")
+			fmt.Println("CombineResults: Error: can't convert input to integer")
 		}
 
 		values = append(values, str)
