@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -28,7 +29,9 @@ type UserXml struct {
 
 // код писать тут
 func SearchServer(res http.ResponseWriter, req *http.Request) {
-	users, err := getUsers()
+	limit, _ := strconv.Atoi(req.FormValue("limit"))
+	offset, _ := strconv.Atoi(req.FormValue("offset"))
+	users, err := getUsers(limit, offset)
 	if err != nil {
 		fmt.Printf("SearchServer error: %v", err)
 		return
@@ -48,7 +51,7 @@ func SearchServer(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func getUsers() ([]User, error) {
+func getUsers(limit, offset int) ([]User, error) {
 	fileReader, err := os.Open("./dataset.xml")
 	if err != nil {
 		return nil, err
@@ -60,7 +63,10 @@ func getUsers() ([]User, error) {
 	}
 
 	usersXml := UsersXml{}
-	xml.Unmarshal(bytes, &usersXml)
+	err = xml.Unmarshal(bytes, &usersXml)
+	if err != nil {
+		return nil, err
+	}
 	users := make([]User, len(usersXml.List))
 
 	for idx, userXml := range usersXml.List {
@@ -73,17 +79,55 @@ func getUsers() ([]User, error) {
 		}
 	}
 
-	return users, nil
+	return users[offset : offset+limit], nil
 }
 
+// Should handle empty search request.
 func TestEmptyRequest(t *testing.T) {
 	// Initialize test server instance
 	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
 	defer testServer.Close()
-	users, _ := getUsers()
-	expected := &SearchResponse{Users: users, NextPage: false}
+	// Use hardcoded data instead.
+	users := []User{}
+	expected := &SearchResponse{Users: users, NextPage: true}
 	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
 	request := SearchRequest{}
+	result, err := client.FindUsers(request)
+	if err != nil {
+		t.Errorf("FindUsers error: %v", err)
+	} else if !reflect.DeepEqual(expected, result) {
+		t.Errorf("Expected: %v\nActual: %v", expected, result)
+	}
+}
+
+// Should handle search request with limit.
+func TestRequestWithLimit(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	// Use hardcoded data instead.
+	users, _ := getUsers(3, 0)
+	expected := &SearchResponse{Users: users, NextPage: true}
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{Limit: 3, Offset: 0}
+	result, err := client.FindUsers(request)
+	if err != nil {
+		t.Errorf("FindUsers error: %v", err)
+	} else if !reflect.DeepEqual(expected, result) {
+		t.Errorf("Expected: %v\nActual: %v", expected, result)
+	}
+}
+
+// Should handle search request with offset.
+func TestRequestWithOffset(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	// Use hardcoded data instead.
+	users, _ := getUsers(1, 10)
+	expected := &SearchResponse{Users: users, NextPage: true}
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{Limit: 1, Offset: 10}
 	result, err := client.FindUsers(request)
 	if err != nil {
 		t.Errorf("FindUsers error: %v", err)
