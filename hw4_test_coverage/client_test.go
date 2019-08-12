@@ -10,6 +10,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -31,7 +32,8 @@ type UserXml struct {
 func SearchServer(res http.ResponseWriter, req *http.Request) {
 	limit, _ := strconv.Atoi(req.FormValue("limit"))
 	offset, _ := strconv.Atoi(req.FormValue("offset"))
-	users, err := getUsers(limit, offset)
+	orderBy, _ := strconv.Atoi(req.FormValue("order_by"))
+	users, err := getUsers(limit, offset, orderBy)
 	if err != nil {
 		fmt.Printf("SearchServer error: %v", err)
 		return
@@ -51,7 +53,7 @@ func SearchServer(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func getUsers(limit, offset int) ([]User, error) {
+func getUsers(limit, offset, orderBy int) ([]User, error) {
 	fileReader, err := os.Open("./dataset.xml")
 	if err != nil {
 		return nil, err
@@ -68,15 +70,32 @@ func getUsers(limit, offset int) ([]User, error) {
 		return nil, err
 	}
 	users := make([]User, len(usersXml.List))
+	users[0] = User{
+		Id:     usersXml.List[0].Id,
+		Name:   usersXml.List[0].FirstName + " " + usersXml.List[0].LastName,
+		Age:    usersXml.List[0].Age,
+		About:  usersXml.List[0].About,
+		Gender: usersXml.List[0].Gender,
+	}
 
-	for idx, userXml := range usersXml.List {
-		users[idx] = User{
+	// Process xml users performing inserts sort on required filed.
+	for i := 1; i < len(usersXml.List); i++ {
+		userXml := usersXml.List[i]
+		user := User{
 			Id:     userXml.Id,
 			Name:   userXml.FirstName + " " + userXml.LastName,
 			Age:    userXml.Age,
 			About:  userXml.About,
 			Gender: userXml.Gender,
 		}
+		j := i
+
+		for j > 0 && strings.Compare(user.Name, users[j-1].Name) == orderBy {
+			users[j] = users[j-1]
+			j--
+		}
+
+		users[j] = user
 	}
 
 	return users[offset : offset+limit], nil
@@ -106,7 +125,7 @@ func TestRequestWithLimit(t *testing.T) {
 	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
 	defer testServer.Close()
 	// Use hardcoded data instead.
-	users, _ := getUsers(3, 0)
+	users, _ := getUsers(3, 0, 0)
 	expected := &SearchResponse{Users: users, NextPage: true}
 	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
 	request := SearchRequest{Limit: 3, Offset: 0}
@@ -124,10 +143,28 @@ func TestRequestWithOffset(t *testing.T) {
 	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
 	defer testServer.Close()
 	// Use hardcoded data instead.
-	users, _ := getUsers(1, 10)
+	users, _ := getUsers(1, 10, 0)
 	expected := &SearchResponse{Users: users, NextPage: true}
 	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
 	request := SearchRequest{Limit: 1, Offset: 10}
+	result, err := client.FindUsers(request)
+	if err != nil {
+		t.Errorf("FindUsers error: %v", err)
+	} else if !reflect.DeepEqual(expected, result) {
+		t.Errorf("Expected: %v\nActual: %v", expected, result)
+	}
+}
+
+// Should handle search request with ordered data.
+func TestRequestWithOrder(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	// Use hardcoded data instead.
+	users, _ := getUsers(3, 0, 1)
+	expected := &SearchResponse{Users: users, NextPage: true}
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{Limit: 3, Offset: 0, OrderBy: 1}
 	result, err := client.FindUsers(request)
 	if err != nil {
 		t.Errorf("FindUsers error: %v", err)
