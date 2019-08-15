@@ -10,7 +10,6 @@ import (
 	"os"
 	"reflect"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -30,15 +29,27 @@ type UserXml struct {
 
 // код писать тут
 func SearchServer(res http.ResponseWriter, req *http.Request) {
-	limit, _ := strconv.Atoi(req.FormValue("limit"))
-	offset, _ := strconv.Atoi(req.FormValue("offset"))
-	orderBy, _ := strconv.Atoi(req.FormValue("order_by"))
-	users, err := getUsers(limit, offset, orderBy)
+	limit, err := strconv.Atoi(req.FormValue("limit"))
 	if err != nil {
 		fmt.Printf("SearchServer error: %v", err)
 		return
 	}
-
+	offset, err := strconv.Atoi(req.FormValue("offset"))
+	if err != nil {
+		fmt.Printf("SearchServer error: %v", err)
+		return
+	}
+	orderBy, err := strconv.Atoi(req.FormValue("order_by"))
+	if err != nil {
+		fmt.Printf("SearchServer error: %v", err)
+		return
+	}
+	orederField := req.FormValue("order_field")
+	users, err := getUsers(limit, offset, orderBy, orederField)
+	if err != nil {
+		fmt.Printf("SearchServer error: %v", err)
+		return
+	}
 	usersJson, err := json.Marshal(users)
 	if err != nil {
 		fmt.Printf("SearchServer error: %v", err)
@@ -53,12 +64,18 @@ func SearchServer(res http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func getUsers(limit, offset, orderBy int) ([]User, error) {
+func getUsers(limit, offset, orderBy int, orderField string) ([]User, error) {
 	fileReader, err := os.Open("./dataset.xml")
 	if err != nil {
 		return nil, err
 	}
-	defer fileReader.Close()
+	defer func() {
+		err := fileReader.Close()
+		if err != nil {
+			fmt.Printf("error: %v", err)
+			return
+		}
+	}()
 	bytes, err := ioutil.ReadAll(fileReader)
 	if err != nil {
 		return nil, err
@@ -90,9 +107,11 @@ func getUsers(limit, offset, orderBy int) ([]User, error) {
 		}
 		j := i
 
-		for j > 0 && strings.Compare(user.Name, users[j-1].Name) == orderBy {
-			users[j] = users[j-1]
-			j--
+		if orderBy != OrderByAsIs {
+			for j > 0 && (compareUsers(user, users[j-1], orderField) == (orderBy == OrderByDesc)) {
+				users[j] = users[j-1]
+				j--
+			}
 		}
 
 		users[j] = user
@@ -101,12 +120,22 @@ func getUsers(limit, offset, orderBy int) ([]User, error) {
 	return users[offset : offset+limit], nil
 }
 
+func compareUsers(user1, user2 User, key string) bool {
+	switch key {
+	case "Age":
+		return user1.Age < user2.Age
+	case "Id":
+		return user1.Id < user2.Id
+	default:
+		return user1.Name < user2.Name
+	}
+}
+
 // Should handle empty search request.
 func TestEmptyRequest(t *testing.T) {
 	// Initialize test server instance
 	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
 	defer testServer.Close()
-	// Use hardcoded data instead.
 	users := []User{}
 	expected := &SearchResponse{Users: users, NextPage: true}
 	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
@@ -124,11 +153,23 @@ func TestRequestWithLimit(t *testing.T) {
 	// Initialize test server instance
 	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
 	defer testServer.Close()
-	// Use hardcoded data instead.
-	users, _ := getUsers(3, 0, 0)
+	users := []User{
+		{
+			Id:   0,
+			Name: "Boyd Wolf",
+			Age:  22,
+			About: "Nulla cillum enim voluptate consequat laborum esse excepteur occaecat commodo nostrud excepteur" +
+				" ut cupidatat. Occaecat minim incididunt ut proident ad sint nostrud ad laborum sint pariatur. " +
+				"Ut nulla commodo dolore officia. Consequat anim eiusmod amet commodo eiusmod deserunt culpa. " +
+				"Ea sit dolore nostrud cillum proident nisi mollit est Lorem pariatur. " +
+				"Lorem aute officia deserunt dolor nisi aliqua consequat nulla nostrud ipsum irure id deserunt " +
+				"dolore. Minim reprehenderit nulla exercitation labore ipsum.\n",
+			Gender: "male",
+		},
+	}
 	expected := &SearchResponse{Users: users, NextPage: true}
 	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
-	request := SearchRequest{Limit: 3, Offset: 0}
+	request := SearchRequest{Limit: 1}
 	result, err := client.FindUsers(request)
 	if err != nil {
 		t.Errorf("FindUsers error: %v", err)
@@ -142,8 +183,17 @@ func TestRequestWithOffset(t *testing.T) {
 	// Initialize test server instance
 	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
 	defer testServer.Close()
-	// Use hardcoded data instead.
-	users, _ := getUsers(1, 10, 0)
+	users := []User{
+		{
+			Id:   10,
+			Name: "Henderson Maxwell",
+			Age:  30,
+			About: "Ex et excepteur anim in eiusmod. " +
+				"Cupidatat sunt aliquip exercitation velit minim aliqua ad ipsum cillum dolor do sit dolore cillum. " +
+				"Exercitation eu in ex qui voluptate fugiat amet.\n",
+			Gender: "male",
+		},
+	}
 	expected := &SearchResponse{Users: users, NextPage: true}
 	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
 	request := SearchRequest{Limit: 1, Offset: 10}
@@ -160,11 +210,92 @@ func TestRequestWithOrder(t *testing.T) {
 	// Initialize test server instance
 	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
 	defer testServer.Close()
-	// Use hardcoded data instead.
-	users, _ := getUsers(3, 0, 1)
+	users := []User{
+		{
+			Id:   15,
+			Name: "Allison Valdez",
+			Age:  21,
+			About: "Labore excepteur voluptate velit occaecat est nisi minim. " +
+				"Laborum ea et irure nostrud enim sit incididunt reprehenderit id est nostrud eu. " +
+				"Ullamco sint nisi voluptate cillum nostrud aliquip et minim. " +
+				"Enim duis esse do aute qui officia ipsum ut occaecat deserunt. " +
+				"Pariatur pariatur nisi do ad dolore reprehenderit et et enim esse dolor qui. " +
+				"Excepteur ullamco adipisicing qui adipisicing tempor minim aliquip.\n",
+			Gender: "male",
+		},
+		{
+			Id:   16,
+			Name: "Annie Osborn",
+			Age:  35,
+			About: "Consequat fugiat veniam commodo nisi nostrud culpa pariatur. " +
+				"Aliquip velit adipisicing dolor et nostrud. " +
+				"Eu nostrud officia velit eiusmod ullamco duis eiusmod ad non do quis.\n",
+			Gender: "female",
+		},
+		{
+			Id:   19,
+			Name: "Bell Bauer",
+			Age:  26,
+			About: "Nulla voluptate nostrud nostrud do ut tempor et quis non aliqua cillum in duis. " +
+				"Sit ipsum sit ut non proident exercitation. " +
+				"Quis consequat laboris deserunt adipisicing eiusmod non cillum magna.\n",
+			Gender: "male",
+		},
+	}
 	expected := &SearchResponse{Users: users, NextPage: true}
 	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
-	request := SearchRequest{Limit: 3, Offset: 0, OrderBy: 1}
+	request := SearchRequest{Limit: 3, OrderBy: 1}
+	result, err := client.FindUsers(request)
+	if err != nil {
+		t.Errorf("FindUsers error: %v", err)
+	} else if !reflect.DeepEqual(expected, result) {
+		t.Errorf("Expected: %v\nActual: %v", expected, result)
+	}
+}
+
+// Should handle search request with ordered by specific field data.
+func TestRequestWithOrderField(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	users := []User{
+		{
+			Id:   32,
+			Name: "Christy Knapp",
+			Age:  40,
+			About: "Incididunt culpa dolore laborum cupidatat consequat. " +
+				"Aliquip cupidatat pariatur sit consectetur laboris labore anim labore. " +
+				"Est sint ut ipsum dolor ipsum nisi tempor in tempor aliqua. " +
+				"Aliquip labore cillum est consequat anim officia non reprehenderit ex duis elit. " +
+				"Amet aliqua eu ad velit incididunt ad ut magna. Culpa dolore qui anim consequat commodo aute.\n",
+			Gender: "female",
+		},
+		{
+			Id:   13,
+			Name: "Whitley Davidson",
+			Age:  40,
+			About: "Consectetur dolore anim veniam aliqua deserunt officia eu. " +
+				"Et ullamco commodo ad officia duis ex incididunt proident consequat nostrud proident quis tempor. " +
+				"Sunt magna ad excepteur eu sint aliqua eiusmod deserunt proident. " +
+				"Do labore est dolore voluptate ullamco est dolore excepteur magna duis quis. " +
+				"Quis laborum deserunt ipsum velit occaecat est laborum enim aute. " +
+				"Officia dolore sit voluptate quis mollit veniam. " +
+				"Laborum nisi ullamco nisi sit nulla cillum et id nisi.\n",
+			Gender: "male",
+		},
+		{
+			Id:   26,
+			Name: "Sims Cotton",
+			Age:  39,
+			About: "Ex cupidatat est velit consequat ad. Tempor non cillum labore non voluptate. " +
+				"Et proident culpa labore deserunt ut aliquip commodo laborum nostrud. " +
+				"Anim minim occaecat est est minim.\n",
+			Gender: "male",
+		},
+	}
+	expected := &SearchResponse{Users: users, NextPage: true}
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{Limit: 3, OrderBy: -1, OrderField: "Age"}
 	result, err := client.FindUsers(request)
 	if err != nil {
 		t.Errorf("FindUsers error: %v", err)
