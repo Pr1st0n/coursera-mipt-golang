@@ -85,6 +85,8 @@ func getUsers(limit, offset, orderBy int, orderField string) ([]User, error) {
 	err = xml.Unmarshal(bytes, &usersXml)
 	if err != nil {
 		return nil, err
+	} else if len(usersXml.List) <= offset {
+		return nil, fmt.Errorf("offset is greater than actual data length")
 	}
 	users := make([]User, len(usersXml.List))
 	users[0] = User{
@@ -108,13 +110,17 @@ func getUsers(limit, offset, orderBy int, orderField string) ([]User, error) {
 		j := i
 
 		if orderBy != OrderByAsIs {
-			for j > 0 && (compareUsers(user, users[j-1], orderField) == (orderBy == OrderByDesc)) {
+			for j > 0 && (compareUsers(user, users[j-1], orderField) == (orderBy == OrderByAsc)) {
 				users[j] = users[j-1]
 				j--
 			}
 		}
 
 		users[j] = user
+	}
+
+	if offset+limit > len(users) {
+		limit = len(users) - offset
 	}
 
 	return users[offset : offset+limit], nil
@@ -148,6 +154,49 @@ func TestEmptyRequest(t *testing.T) {
 	}
 }
 
+// Should handle search request with exceeded limit.
+func TestRequestWithExceededLimit(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	users := []User{
+		{
+			Id:   15,
+			Name: "Allison Valdez",
+			Age:  21,
+			About: "Labore excepteur voluptate velit occaecat est nisi minim. " +
+				"Laborum ea et irure nostrud enim sit incididunt reprehenderit id est nostrud eu. " +
+				"Ullamco sint nisi voluptate cillum nostrud aliquip et minim. " +
+				"Enim duis esse do aute qui officia ipsum ut occaecat deserunt. " +
+				"Pariatur pariatur nisi do ad dolore reprehenderit et et enim esse dolor qui. " +
+				"Excepteur ullamco adipisicing qui adipisicing tempor minim aliquip.\n",
+			Gender: "male",
+		},
+	}
+	expected := &SearchResponse{Users: users, NextPage: false}
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{Offset: 34, Limit: 30, OrderBy: OrderByDesc}
+	result, err := client.FindUsers(request)
+	if err != nil {
+		t.Errorf("FindUsers error: %v", err)
+	} else if !reflect.DeepEqual(expected, result) {
+		t.Errorf("Expected: %v\nActual: %v", expected, result)
+	}
+}
+
+// Should handle search request with negative limit.
+func TestRequestWithNegativeLimit(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{Limit: -1}
+	_, err := client.FindUsers(request)
+	if err == nil || err.Error() != "limit must be > 0" {
+		t.Errorf("FindUsers unexpected error: %v", err)
+	}
+}
+
 // Should handle search request with limit.
 func TestRequestWithLimit(t *testing.T) {
 	// Initialize test server instance
@@ -175,6 +224,19 @@ func TestRequestWithLimit(t *testing.T) {
 		t.Errorf("FindUsers error: %v", err)
 	} else if !reflect.DeepEqual(expected, result) {
 		t.Errorf("Expected: %v\nActual: %v", expected, result)
+	}
+}
+
+// Should handle search request with negative offset.
+func TestRequestWithNegativeOffset(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{Offset: -1}
+	_, err := client.FindUsers(request)
+	if err == nil || err.Error() != "offset must be > 0" {
+		t.Errorf("FindUsers unexpected error: %v", err)
 	}
 }
 
@@ -244,7 +306,7 @@ func TestRequestWithOrder(t *testing.T) {
 	}
 	expected := &SearchResponse{Users: users, NextPage: true}
 	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
-	request := SearchRequest{Limit: 3, OrderBy: 1}
+	request := SearchRequest{Limit: 3, OrderBy: OrderByAsc}
 	result, err := client.FindUsers(request)
 	if err != nil {
 		t.Errorf("FindUsers error: %v", err)
@@ -295,7 +357,7 @@ func TestRequestWithOrderField(t *testing.T) {
 	}
 	expected := &SearchResponse{Users: users, NextPage: true}
 	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
-	request := SearchRequest{Limit: 3, OrderBy: -1, OrderField: "Age"}
+	request := SearchRequest{Limit: 3, OrderBy: OrderByDesc, OrderField: "Age"}
 	result, err := client.FindUsers(request)
 	if err != nil {
 		t.Errorf("FindUsers error: %v", err)
