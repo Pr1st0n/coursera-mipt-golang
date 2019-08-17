@@ -10,7 +10,9 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 type UsersXml struct {
@@ -31,36 +33,47 @@ type UserXml struct {
 func SearchServer(res http.ResponseWriter, req *http.Request) {
 	limit, err := strconv.Atoi(req.FormValue("limit"))
 	if err != nil {
-		fmt.Printf("SearchServer error: %v", err)
+		res.Write([]byte(fmt.Sprintf("invalid limit parameter value")))
+		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	offset, err := strconv.Atoi(req.FormValue("offset"))
 	if err != nil {
-		fmt.Printf("SearchServer error: %v", err)
+		res.Write([]byte(fmt.Sprintf("invalid offset parameter value")))
+		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	orderBy, err := strconv.Atoi(req.FormValue("order_by"))
 	if err != nil {
-		fmt.Printf("SearchServer error: %v", err)
+		res.Write([]byte(fmt.Sprintf("invalid order_by parameter value")))
+		res.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	orederField := req.FormValue("order_field")
-	users, err := getUsers(limit, offset, orderBy, orederField)
+	orderField := req.FormValue("order_field")
+	if lowOrderField := strings.ToLower(orderField); len(lowOrderField) > 0 && lowOrderField != "name" &&
+		lowOrderField != "age" && lowOrderField != "id" {
+		res.WriteHeader(http.StatusBadRequest)
+		res.Write([]byte(fmt.Sprintf(ErrorBadOrderField+" %v", orderField)))
+		return
+	}
+	users, err := getUsers(limit, offset, orderBy, orderField)
 	if err != nil {
-		fmt.Printf("SearchServer error: %v", err)
+		res.Write([]byte(fmt.Sprintf("failed to obtain users data")))
+		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	usersJson, err := json.Marshal(users)
 	if err != nil {
-		fmt.Printf("SearchServer error: %v", err)
+		res.Write([]byte(fmt.Sprintf("failed to process users data")))
+		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	res.WriteHeader(http.StatusOK)
 	_, err = res.Write(usersJson)
 	if err != nil {
-		fmt.Printf("SearchServer error: %v", err)
-		return
+		res.Write([]byte(fmt.Sprintf("failed to obtain users data")))
+		res.WriteHeader(http.StatusInternalServerError)
 	}
 }
 
@@ -69,13 +82,7 @@ func getUsers(limit, offset, orderBy int, orderField string) ([]User, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		err := fileReader.Close()
-		if err != nil {
-			fmt.Printf("error: %v", err)
-			return
-		}
-	}()
+	defer fileReader.Close()
 	bytes, err := ioutil.ReadAll(fileReader)
 	if err != nil {
 		return nil, err
@@ -363,5 +370,48 @@ func TestRequestWithOrderField(t *testing.T) {
 		t.Errorf("FindUsers error: %v", err)
 	} else if !reflect.DeepEqual(expected, result) {
 		t.Errorf("Expected: %v\nActual: %v", expected, result)
+	}
+}
+
+// Should handle search request timeout.
+func TestRequestTimeout(t *testing.T) {
+	// Initialize test server instance
+	timeoutServer := func(res http.ResponseWriter, req *http.Request) {
+		time.Sleep(2 * time.Second)
+	}
+	testServer := httptest.NewServer(http.HandlerFunc(timeoutServer))
+	defer testServer.Close()
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{}
+	_, err := client.FindUsers(request)
+	if err == nil || err.Error() != "timeout for limit=1&offset=0&order_by=0&order_field=&query=" {
+		t.Errorf("FindUsers error: %v", err)
+	}
+}
+
+// Should handle search request JSON parse error.
+func TestRequestJsonError(t *testing.T) {
+	// Initialize test server instance
+	emptyServer := func(res http.ResponseWriter, req *http.Request) {}
+	testServer := httptest.NewServer(http.HandlerFunc(emptyServer))
+	defer testServer.Close()
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{}
+	_, err := client.FindUsers(request)
+	if err == nil || err.Error() != "cant unpack result json: unexpected end of JSON input" {
+		t.Errorf("FindUsers error: %v", err)
+	}
+}
+
+// Should handle bad search request.
+func TestBadRequest(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{OrderField: "invalid"}
+	_, err := client.FindUsers(request)
+	if err == nil || err.Error() != "cant unpack error json: invalid character 'O' looking for beginning of value" {
+		t.Errorf("FindUsers error: %v", err)
 	}
 }
