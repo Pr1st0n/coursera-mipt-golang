@@ -31,6 +31,10 @@ type UserXml struct {
 
 // код писать тут
 func SearchServer(res http.ResponseWriter, req *http.Request) {
+	if authorized := validateAuthToken(req.Header.Get("AccessToken")); !authorized {
+		res.WriteHeader(http.StatusUnauthorized)
+		return
+	}
 	limit, err := strconv.Atoi(req.FormValue("limit"))
 	if err != nil {
 		res.Write([]byte(fmt.Sprintf("invalid limit parameter value")))
@@ -53,28 +57,32 @@ func SearchServer(res http.ResponseWriter, req *http.Request) {
 	if lowOrderField := strings.ToLower(orderField); len(lowOrderField) > 0 && lowOrderField != "name" &&
 		lowOrderField != "age" && lowOrderField != "id" {
 		res.WriteHeader(http.StatusBadRequest)
-		res.Write([]byte(fmt.Sprintf(ErrorBadOrderField+" %v", orderField)))
+		responseWithError(res, "ErrorBadOrderField")
 		return
 	}
 	users, err := getUsers(limit, offset, orderBy, orderField)
 	if err != nil {
-		res.Write([]byte(fmt.Sprintf("failed to obtain users data")))
 		res.WriteHeader(http.StatusInternalServerError)
+		responseWithError(res, "failed to obtain users data")
 		return
 	}
 	usersJson, err := json.Marshal(users)
 	if err != nil {
-		res.Write([]byte(fmt.Sprintf("failed to process users data")))
+		responseWithError(res, "failed to process users data")
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	res.WriteHeader(http.StatusOK)
-	_, err = res.Write(usersJson)
-	if err != nil {
-		res.Write([]byte(fmt.Sprintf("failed to obtain users data")))
-		res.WriteHeader(http.StatusInternalServerError)
+	res.Write(usersJson)
+}
+
+// Dummy session validation.
+func validateAuthToken(token string) bool {
+	if token != "test_token" {
+		return false
 	}
+	return true
 }
 
 func getUsers(limit, offset, orderBy int, orderField string) ([]User, error) {
@@ -141,6 +149,42 @@ func compareUsers(user1, user2 User, key string) bool {
 		return user1.Id < user2.Id
 	default:
 		return user1.Name < user2.Name
+	}
+}
+
+func responseWithError(res http.ResponseWriter, error string) bool {
+	errObj := SearchErrorResponse{Error: error}
+	resBody, _ := json.Marshal(errObj)
+	_, err := res.Write(resBody)
+	if err != nil {
+		return false
+	}
+	return true
+}
+
+// Should handle failed authorization.
+func TestAuthFailed(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	client := SearchClient{AccessToken: "invalid_token", URL: testServer.URL}
+	request := SearchRequest{}
+	_, err := client.FindUsers(request)
+	if err == nil || err.Error() != "Bad AccessToken" {
+		t.Errorf("FindUsers error: should not authorize with invalid token")
+	}
+}
+
+// Should handle successful authorization.
+func TestAuthSuccess(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{}
+	_, err := client.FindUsers(request)
+	if err != nil {
+		t.Errorf("FindUsers error: should authorize with valid token")
 	}
 }
 
@@ -373,6 +417,19 @@ func TestRequestWithOrderField(t *testing.T) {
 	}
 }
 
+// Should handle search request with invalid field value.
+func TestOrderFieldErr(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{OrderField: "invalid_field"}
+	_, err := client.FindUsers(request)
+	if err == nil || err.Error() != "OrderFeld invalid_field invalid" {
+		t.Errorf("FindUsers error: %v", err)
+	}
+}
+
 // Should handle search request timeout.
 func TestRequestTimeout(t *testing.T) {
 	// Initialize test server instance
@@ -411,7 +468,20 @@ func TestBadRequest(t *testing.T) {
 	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
 	request := SearchRequest{OrderField: "invalid"}
 	_, err := client.FindUsers(request)
-	if err == nil || err.Error() != "cant unpack error json: invalid character 'O' looking for beginning of value" {
+	if err == nil {
+		t.Errorf("FindUsers should return error")
+	}
+}
+
+// Should handle internal server error.
+func TestInternalServerErr(t *testing.T) {
+	// Initialize test server instance
+	testServer := httptest.NewServer(http.HandlerFunc(SearchServer))
+	defer testServer.Close()
+	client := SearchClient{AccessToken: "test_token", URL: testServer.URL}
+	request := SearchRequest{Offset: 100}
+	_, err := client.FindUsers(request)
+	if err == nil || err.Error() != "SearchServer fatal error" {
 		t.Errorf("FindUsers error: %v", err)
 	}
 }
